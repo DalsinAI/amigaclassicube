@@ -41,6 +41,8 @@ extern cc_string Game_Mppass;
     #define DEFAULT_VIEWDIST 20
 #elif defined CC_BUILD_SYMBIAN
 	#define DEFAULT_VIEWDIST 64
+#elif defined CC_BUILD_AMIGA_RTG
+	#define DEFAULT_VIEWDIST 64 /* software rendering on a 68040/68060 */
 #elif defined CC_BUILD_NDS
     #define DEFAULT_VIEWDIST 192
 #else

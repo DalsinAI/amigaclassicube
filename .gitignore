@@ -232,3 +232,7 @@ UpgradeLog*.htm
 
 # Watcom
 *.err
+
+# Amiga port: the build and the game drawer made by amiga/Makefile.amigaos
+/build/amigaos
+/dist
