@@ -11,6 +11,25 @@
 
 static SDL_Window* win_handle;
 
+#ifdef CC_BUILD_AMIGA_RTG
+/* AmigaOS 3.x on OpenGPU's SDL2.module: a full-screen RTG screen of
+   AMIGA_SCREEN_W x AMIGA_SCREEN_H (or a Workbench window with the option
+   amiga-windowed=true), a renderer, and a streaming XRGB8888 texture of
+   the size the game draws at (window-width x window-height, 640x480 unless
+   set lower), which the renderer scales up to the screen. The window
+   surface is not used: SDL2.module reports a 24-bit one. */
+#include "Options.h"
+/* amiga/amiga_dialog.c: Intuition's headers are kept out of this file */
+/*  (the NDK has a FILENAME_SIZE of its own) */
+void amiga_show_requester(const char* title, const char* msg, int over_game);
+
+#define AMIGA_SCREEN_W 640
+#define AMIGA_SCREEN_H 480
+static SDL_Renderer* amiga_renderer;
+static SDL_Texture*  amiga_texture;
+static int amiga_w = AMIGA_SCREEN_W, amiga_h = AMIGA_SCREEN_H;
+#endif
+
 #ifdef CC_BUILD_OS2
 #define INCL_PM
 #include <os2.h>
@@ -41,7 +60,14 @@ typedef struct _WINDATA {
 static void SetGLAttributes();
 
 static void RefreshWindowBounds(void) {
+#ifdef CC_BUILD_AMIGA_RTG
+	/* The game's coordinates are the texture's; the renderer's logical size */
+	/*  scales the mouse to them */
+	Window_Main.Width  = amiga_w;
+	Window_Main.Height = amiga_h;
+#else
 	SDL_GetWindowSize(win_handle, &Window_Main.Width, &Window_Main.Height);
+#endif
 }
 
 static void Window_SDLFail(const char* place) {
@@ -55,10 +81,27 @@ static void Window_SDLFail(const char* place) {
 }
 
 void Window_PreInit(void) {
+#ifdef CC_BUILD_AMIGA_RTG
+	/* A missing joystick driver must not take the screen with it */
+	SDL_Init(SDL_INIT_VIDEO);
+	SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
+#else
 	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER);
+#endif
 	DisplayInfo.CursorVisible = true;
 }
 
+#ifdef CC_BUILD_AMIGA_RTG
+void Window_Init(void) {
+	Input.Sources = INPUT_SOURCE_NORMAL;
+
+	DisplayInfo.Width  = AMIGA_SCREEN_W;
+	DisplayInfo.Height = AMIGA_SCREEN_H;
+	DisplayInfo.Depth  = 32;
+	DisplayInfo.ScaleX = 1;
+	DisplayInfo.ScaleY = 1;
+}
+#else
 void Window_Init(void) {
 	SDL_DisplayMode mode = { 0 };
 	SDL_GetDesktopDisplayMode(0, &mode);
@@ -70,10 +113,12 @@ void Window_Init(void) {
 	DisplayInfo.ScaleX = 1;
 	DisplayInfo.ScaleY = 1;
 }
+#endif
 
 void Window_Free(void) { }
 
 
+#ifndef CC_BUILD_AMIGA_RTG
 /* See misc/sdl/sdl_icon_gen.cs for how to generate this file */
 #include "../misc/sdl/CCIcon_SDL.h"
 
@@ -82,7 +127,37 @@ static void ApplyIcon(void) {
 													0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
 	SDL_SetWindowIcon(win_handle, surface);
 }
+#endif
 
+#ifdef CC_BUILD_AMIGA_RTG
+static void DoCreateWindow(int width, int height, int flags) {
+	cc_bool windowed = Options_GetBool("amiga-windowed", false);
+	if (width  < 160 || width  > AMIGA_SCREEN_W) width  = AMIGA_SCREEN_W;
+	if (height < 120 || height > AMIGA_SCREEN_H) height = AMIGA_SCREEN_H;
+	amiga_w = width; amiga_h = height;
+
+	if (windowed) {
+		win_handle = SDL_CreateWindow("ClassiCube", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+						width, height, 0);
+	} else {
+		win_handle = SDL_CreateWindow("ClassiCube", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+						AMIGA_SCREEN_W, AMIGA_SCREEN_H, SDL_WINDOW_FULLSCREEN);
+	}
+	if (!win_handle) Window_SDLFail("creating window");
+
+	amiga_renderer = SDL_CreateRenderer(win_handle, -1, 0);
+	if (!amiga_renderer) Window_SDLFail("creating renderer");
+	SDL_RenderSetLogicalSize(amiga_renderer, width, height);
+
+	RefreshWindowBounds();
+	Window_Main.Exists     = true;
+	Window_Main.Handle.ptr = win_handle;
+	Window_Main.Focused    = true;
+	Window_Main.UIScaleX   = DEFAULT_UI_SCALE_X;
+	Window_Main.UIScaleY   = DEFAULT_UI_SCALE_Y;
+	Window_Main.SoftKeyboardInstant = true;
+}
+#else
 static void DoCreateWindow(int width, int height, int flags) {
 	win_handle = SDL_CreateWindow(NULL, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, 
 					flags | SDL_WINDOW_RESIZABLE);
@@ -98,6 +173,7 @@ static void DoCreateWindow(int width, int height, int flags) {
 	ApplyIcon();
 	/* TODO grab using SDL_SetWindowGrab? seems to be unnecessary on Linux at least */
 }
+#endif
 
 void Window_Create2D(int width, int height) { DoCreateWindow(width, height, 0); }
 #if CC_GFX_BACKEND_IS_GL()
@@ -110,7 +186,14 @@ void Window_Create3D(int width, int height) { DoCreateWindow(width, height, 0); 
 #endif
 
 void Window_Destroy(void) {
+#ifdef CC_BUILD_AMIGA_RTG
+	if (amiga_texture)  SDL_DestroyTexture(amiga_texture);
+	if (amiga_renderer) SDL_DestroyRenderer(amiga_renderer);
+	amiga_texture  = NULL;
+	amiga_renderer = NULL;
+#endif
 	SDL_DestroyWindow(win_handle);
+	win_handle = NULL;
 }
 
 void Window_SetTitle(const cc_string* title) {
@@ -142,6 +225,11 @@ int Window_GetWindowState(void) {
 	return WINDOW_STATE_NORMAL;
 }
 
+#ifdef CC_BUILD_AMIGA_RTG
+/* The screen (or window) is chosen once, at start-up */
+cc_result Window_EnterFullscreen(void) { return 0; }
+cc_result Window_ExitFullscreen(void)  { return 0; }
+#else
 cc_result Window_EnterFullscreen(void) {
 	return SDL_SetWindowFullscreen(win_handle, SDL_WINDOW_FULLSCREEN_DESKTOP);
 }
@@ -149,13 +237,16 @@ cc_result Window_EnterFullscreen(void) {
 cc_result Window_ExitFullscreen(void) { 
 	return SDL_SetWindowFullscreen(win_handle, 0);
 }
+#endif
 
 int Window_IsObscured(void) { return 0; }
 
 void Window_Show(void) { SDL_ShowWindow(win_handle); }
 
 void Window_SetSize(int width, int height) {
+#ifndef CC_BUILD_AMIGA_RTG
 	SDL_SetWindowSize(win_handle, width, height);
+#endif
 }
 
 void Window_RequestClose(void) {
@@ -277,6 +368,9 @@ static void OnWindowEvent(const SDL_Event* e) {
 			Event_RaiseVoid(&WindowEvents.RedrawNeeded);
 			break;
 		case SDL_WINDOWEVENT_SIZE_CHANGED:
+#ifdef CC_BUILD_AMIGA_RTG
+			break; /* the texture keeps its size; the renderer scales it */
+#endif
 			RefreshWindowBounds();
 			Event_RaiseVoid(&WindowEvents.Resized);
 			break;
@@ -336,20 +430,51 @@ void Window_ProcessEvents(float delta) {
 	}
 }
 
+#ifdef CC_BUILD_AMIGA_RTG
+/* SDL's mouse state and warp are in the window's pixels, the game's in the */
+/*  texture's (smaller when window-width/height are set below the screen's) */
+static void Amiga_WindowSize(int* w, int* h) {
+	SDL_GetWindowSize(win_handle, w, h);
+	if (*w <= 0) *w = amiga_w;
+	if (*h <= 0) *h = amiga_h;
+}
+
+static void Cursor_GetRawPos(int* x, int* y) {
+	int w, h;
+	SDL_GetMouseState(x, y);
+	Amiga_WindowSize(&w, &h);
+	*x = *x * amiga_w / w;
+	*y = *y * amiga_h / h;
+}
+void Cursor_SetPosition(int x, int y) {
+	int w, h;
+	Amiga_WindowSize(&w, &h);
+	SDL_WarpMouseInWindow(win_handle, x * w / amiga_w, y * h / amiga_h);
+}
+#else
 static void Cursor_GetRawPos(int* x, int* y) {
 	SDL_GetMouseState(x, y);
 }
 void Cursor_SetPosition(int x, int y) {
 	SDL_WarpMouseInWindow(win_handle, x, y);
 }
+#endif
 
 static void Cursor_DoSetVisible(cc_bool visible) {
 	SDL_ShowCursor(visible ? SDL_ENABLE : SDL_DISABLE);
 }
 
+#ifdef CC_BUILD_AMIGA_RTG
+static void ShowDialogCore(const char* title, const char* msg) {
+	Platform_LogConst(title);
+	Platform_LogConst(msg);
+	amiga_show_requester(title, msg, win_handle != NULL);
+}
+#else
 static void ShowDialogCore(const char* title, const char* msg) {
 	SDL_ShowSimpleMessageBox(0, title, msg, win_handle);
 }
+#endif
 
 cc_result Window_OpenFileDialog(const struct OpenFileDialogArgs* args) {
 #if defined CC_BUILD_OS2
@@ -401,6 +526,32 @@ cc_result Window_SaveFileDialog(const struct SaveFileDialogArgs* args) {
 #endif
 }
 
+#ifdef CC_BUILD_AMIGA_RTG
+void Window_AllocFramebuffer(struct Bitmap* bmp, int width, int height) {
+	/* BitmapCol is 0xAARRGGBB in a 32-bit word: XRGB8888 for SDL */
+	amiga_texture = SDL_CreateTexture(amiga_renderer, SDL_PIXELFORMAT_RGB888,
+					SDL_TEXTUREACCESS_STREAMING, width, height);
+	if (!amiga_texture) Window_SDLFail("creating texture");
+
+	bmp->scan0  = (BitmapCol*)Mem_Alloc(width * height, BITMAPCOLOR_SIZE, "window pixels");
+	bmp->width  = width;
+	bmp->height = height;
+}
+
+void Window_DrawFramebuffer(Rect2D r, struct Bitmap* bmp) {
+	SDL_UpdateTexture(amiga_texture, NULL, bmp->scan0, bmp->width * BITMAPCOLOR_SIZE);
+	SDL_RenderClear(amiga_renderer);
+	SDL_RenderCopy(amiga_renderer, amiga_texture, NULL, NULL);
+	SDL_RenderPresent(amiga_renderer);
+}
+
+void Window_FreeFramebuffer(struct Bitmap* bmp) {
+	if (amiga_texture) SDL_DestroyTexture(amiga_texture);
+	amiga_texture = NULL;
+	Mem_Free(bmp->scan0);
+	bmp->scan0 = NULL;
+}
+#else
 static SDL_Surface* win_surface;
 static SDL_Surface* blit_surface;
 
@@ -448,6 +599,7 @@ void Window_FreeFramebuffer(struct Bitmap* bmp) {
 	/* https://wiki.libsdl.org/SDL_GetWindowSurface */
 	/* TODO: Do we still need to unlock it though? */
 }
+#endif
 
 void OnscreenKeyboard_Open(struct OpenKeyboardArgs* args) { SDL_StartTextInput(); }
 void OnscreenKeyboard_SetText(const cc_string* text) { }
