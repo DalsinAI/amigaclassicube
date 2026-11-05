@@ -1,0 +1,86 @@
+# ClassiCube for AmigaOS 3.x, 68040/68060 + FPU, on OpenGPU's SDL 2.
+#
+#   make -f amiga/Makefile.amigaos -j2 \
+#        STOVE=/path/to/openamigagcc-16.2.0-open4 \
+#        NDK=/path/to/OpenNDK/Include_H SDL2KIT=/path/to/opengpu-sdk
+#   make -f amiga/Makefile.amigaos dist
+#
+# STOVE is GFOpenAmigaGCC 16.2.0-open4 or later. SDL2KIT is the OpenGPU
+# developer kit: libSDL2.a, the program's half of LIBS:OpenGPU/SDL2.module
+# (screen, keyboard and mouse). Upstream's SDL 2 window (src/Window_SDL2.c)
+# and software renderer (src/Graphics_SoftGPU.c); the platform layer is
+# amiga/Platform_AmigaRTG.c. Src/Core.h's PLAT_AMIGA_RTG block turns off
+# the network (no launcher, server list, updates or downloads), sound,
+# plugins and FreeType. No other libraries: ClassiCube has its own inflate
+# and PNG decoder. The drawer, with ClassiCube's own texture pack
+# (misc/cc_textures.zip), is $(OUT) (make ... dist).
+
+STOVE   ?= $(HOME)/CradleLab/toolchain/openamigagcc-16.2.0-open4-x86_64-linux
+NDK     ?= $(HOME)/CradleLab/gfopensdk/OpenNDK/Include_H
+SDL2KIT ?= /mnt/amigachrome/team2/deps/opengpu-sdk
+CC      = $(STOVE)/bin/m68k-amigaos-gcc
+STRIP   = $(STOVE)/bin/m68k-amigaos-strip
+CPU     ?= -m68040 -m68881
+# -fno-tree-loop-distribute-patterns: GCC 16's loop miscompile (the kit's
+# sdl2-config gives it for GCC 16 too).
+OPT     ?= -O2 -fomit-frame-pointer -fno-tree-loop-distribute-patterns
+
+DEFS    = -DPLAT_AMIGA_RTG
+INC     = -I$(SDL2KIT)/include -I$(NDK)
+# As upstream's makefiles: no math errno.
+CFLAGS  = -noixemul $(OPT) $(CPU) -fno-math-errno $(DEFS) $(INC)
+AMIGAWARN = -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers
+LDFLAGS = -noixemul $(CPU)
+LIBS    = -L$(SDL2KIT)/lib -lSDL2 -lm
+BUILD   = build/amigaos
+OBJDIR  = $(BUILD)/obj
+OUT     = dist/ClassiCube
+PROG    = ClassiCube
+
+# Every file of src/ (each backend's file builds to nothing unless chosen);
+# not src/amiga/, upstream's unfinished stand-alone Amiga target.
+SRC     = $(wildcard src/*.c)
+OBJS    = $(SRC:%.c=$(OBJDIR)/%.o) \
+          $(OBJDIR)/amiga/Platform_AmigaRTG.o $(OBJDIR)/amiga/amiga_screens.o \
+          $(OBJDIR)/amiga/amiga_dialog.o $(OBJDIR)/amiga/stack.o
+
+ICONS   = $(wildcard amiga/icons/*.info)
+# Every object is rebuilt when any of upstream's headers changes.
+HDRS    = $(wildcard src/*.h)
+
+all: $(BUILD)/$(PROG)
+
+$(BUILD)/$(PROG): $(OBJS)
+	$(CC) $(LDFLAGS) -o $@.debug $(OBJS) $(LIBS)
+	$(STRIP) -o $@ $@.debug
+
+# The drawer: the program, ClassiCube's own textures as the default pack
+# (texpacks/classicube.zip, one of the names the game looks for), a maps
+# drawer for saved worlds and one for screenshots.
+dist: $(BUILD)/$(PROG) $(ICONS) AMIGA_PORT.md license.txt
+	rm -rf $(OUT)
+	mkdir -p $(OUT)/texpacks $(OUT)/maps $(OUT)/screenshots
+	cp $(BUILD)/$(PROG) $(OUT)/$(PROG)
+	cp misc/cc_textures.zip $(OUT)/texpacks/classicube.zip
+	cp AMIGA_PORT.md $(OUT)/ReadMe
+	cp license.txt $(OUT)/LICENSE.txt
+	cp amiga/icons/ClassiCube.info amiga/icons/ReadMe.info $(OUT)/
+	cp amiga/icons/ReadMe.info $(OUT)/LICENSE.txt.info
+	cd $(OUT) && find . -mindepth 1 -type d | while read d; do cp $(CURDIR)/amiga/icons/Data.info "$$d.info"; done
+	cp amiga/icons/ClassiCube-drawer.info dist/ClassiCube.info
+
+$(OBJDIR)/amiga/%.o: amiga/%.c $(HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(AMIGAWARN) -c -o $@ $<
+
+# Upstream's files build with the compiler's default warnings.
+$(OBJDIR)/%.o: %.c $(HDRS)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+objs: $(OBJS)
+
+clean:
+	rm -rf $(BUILD) $(OUT) dist/ClassiCube.info
+
+.PHONY: all dist objs clean
